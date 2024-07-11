@@ -97,3 +97,43 @@ static AVLNode *avl_fix(AVLNode *node) {
         node = node->parent;
     }
 }
+
+// detach a node and returns the new root of the tree
+static AVLNode *avl_del(AVLNode *node) {
+    if (node->right == NULL) {
+        // no right subtree, replace the node with the left subtree
+        // link the left subtree to the parent
+        AVLNode *parent = node->parent;
+        if (node->left) {
+            node->left->parent = parent;
+        }
+        if (parent) {
+            // attach the left subtree to the parent
+            (parent->left == node ? parent->left : parent->right) = node->left;
+            return avl_fix(parent);
+        } else {
+            return node->left;
+        }
+    } else {
+        // detach the successor
+        AVLNode *victim = node->right;
+        while (victim->left) {
+            victim = victim->left;
+        }
+        AVLNode *root = avl_del(victim);
+        // swap with it
+        *victim = *node;
+        if (victim->left) {
+            victim->left->parent = victim;
+        }
+        if (victim->right) {
+            victim->right->parent = victim;
+        }
+        if (AVLNode *parent = node->parent) {
+            (parent->left == node ? parent->left : parent->right) = victim;
+            return root;
+        } else {
+            return victim;
+        }
+    }
+}

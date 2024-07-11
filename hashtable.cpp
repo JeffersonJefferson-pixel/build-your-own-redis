@@ -19,7 +19,7 @@ static void h_insert(HTab *htab, HNode *node) {
   htab->size++;
 }
 
-// returns the address of the parrent pointer that owns the target node
+// returns the address of the parent pointer that owns the target node
 static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
   if (!htab->tab) {
     return NULL;
