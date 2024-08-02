@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -199,10 +200,19 @@ static bool entry_eq(HNode *lhs, HNode *rhs) {
 enum {
   ERR_UNKNOWN = 1,
   ERR_2BIG = 2,
+  ERR_TYPE = 3,
+  ERR_ARG = 4,
 };
 
 static void out_nil(std::string &out) {
   out.push_back(SER_NIL);
+}
+
+static void out_str(std::string &out, const char *s, size_t size) {
+  out.push_back(SER_STR);
+  uint32_t len = (uint32_t)size;
+  out.append((char *)&len, 4);
+  out.append(s, len);
 }
 
 
@@ -218,6 +228,11 @@ static void out_int(std::string &out, int64_t val) {
   out.append((char *)&val, 8);
 }
 
+static void out_dbl(std::string &out, double val) {
+  out.push_back(SER_DBL);
+  out.append((char *)&val, 8);
+}
+
 static void out_err(std::string &out, int32_t code, const std::string &msg) {
   out.push_back(SER_ERR);
   out.append((char *)&code, 4);
@@ -229,6 +244,18 @@ static void out_err(std::string &out, int32_t code, const std::string &msg) {
 static void out_arr(std::string &out, uint32_t n) {
   out.push_back(SER_ARR);
   out.append((char *)&n, 4);
+}
+
+static void *begin_arr(std::string &out) {
+  out.push_back(SER_ARR);
+  out.append("\0\0\0\0", 4); // filled in end_arr()
+  return (void *)(out.size() - 4);
+}
+
+static void end_arr(std::string &out, void *ctx, uint32_t n) {
+  size_t pos = (size_t)ctx;
+  assert(out[pos - 1] == SER_ARR);
+  memcpy(&out[pos], &n, 4);
 }
 
 static void h_scan(HTab *tab, void (*f)(HNode *, void *), void *arg) {
@@ -300,6 +327,85 @@ static void do_del(std::vector<std::string> cmd, std::string &out) {
   }
 
   out_int(out, node ? 1 : 0);
+}
+
+static bool str2dbl(const std::string &s, double &out) {
+  char *endp = NULL;
+  out = strtod(s.c_str(), &endp);
+  return endp == s.c_str() + s.size() && !isnan(out);
+}
+
+static bool str2int(const std::string &s, int64_t &out) {
+  char *endp = NULL;
+  out = strtoll(s.c_str(), &endp, 10);
+  return endp == s.c_str() + s.size();
+}
+
+static bool expect_zset(std::string &out, std::string &s, Entry **ent) {
+  Entry key;
+  key.key.swap(s);
+  key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
+  HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+  if (!hnode) {
+    out_nil(out);
+    return false;
+  } 
+
+  *ent = container_of(hnode, Entry, node);
+  if ((*ent)->type != T_ZSET) {
+    out_err(out, ERR_TYPE, "expect zset");
+    return false;
+  }
+  return true;
+}
+
+// zquery key score name offset limit
+static void do_zquery(std::vector<std::string> &cmd, std::string &out) {
+    // parse args
+    double score = 0;
+    if (!str2dbl(cmd[2], score)) {
+      return out_err(out, ERR_ARG, "expect fp number");
+    }
+
+    const std::string &name = cmd[3];
+    int64_t offset = 0;
+    int64_t limit = 0;
+    if (!str2int(cmd[4], offset)) {
+      return out_err(out, ERR_ARG, "exoect int");
+    }
+    if (!str2int(cmd[5], limit)) {
+      return out_err(out, ERR_ARG, "expect int");
+    }
+
+    // get the zset
+    Entry *ent = NULL;
+    if (!expect_zset(out, cmd[1], &ent)) {
+      if (out[0] == SER_NIL) {
+        out.clear();
+        out_arr(out, 0);
+      }
+      return;
+    }
+
+    if (limit <= 0) {
+      return out_arr(out, 0);
+    }
+    
+    // 1. seek
+    ZNode *znode = zset_query(ent->zset, score, name.data(), name.size());
+    // 2. offste
+    znode = znode_offset(znode, offset);
+    // 3. iterate and output
+    void *arr = begin_arr(out);
+    uint32_t n = 0;
+    while (znode && (int64_t)n < limit) {
+        out_str(out, znode->name, znode->len);
+        out_dbl(out, znode->score);
+        znode = znode_offset(znode, +1); // successor
+        n += 2;
+    }
+    end_arr(out, arr, n);
+
 }
 
 static bool cmd_is(const std::string &word, const char *cmd) {

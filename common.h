@@ -20,5 +20,6 @@ enum {
   SER_ERR = 1,
   SER_STR = 2,
   SER_INT = 3,
-  SER_ARR = 4,
+  SER_DBL = 4,
+  SER_ARR = 5,
 };

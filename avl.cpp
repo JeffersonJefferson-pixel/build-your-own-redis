@@ -1,15 +1,6 @@
-#include <stddef.h>
-#include <stdint.h>
 #include <algorithm>
+#include "avl.h"
 using namespace std;
-
-struct AVLNode {
-    uint32_t depth = 0; // subtree height
-    uint32_t cnt = 0; // subtree size;
-    AVLNode *left = NULL;
-    AVLNode *right = NULL;
-    AVLNode *parent = NULL;
-};
 
 static void avl_init(AVLNode *node) {
     node->depth = 1;

@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include "common.h"
 #include "zset.h"
 
@@ -126,3 +127,23 @@ ZNode *zset_pop(ZSet *zset, const char *name, size_t len) {
 void znode_del(ZNode *node) {
     free(node);
 };
+
+// range query
+ZNode *zset_query(ZSet *zset, double score, const char *name, size_t len) {
+    AVLNode *found = NULL;
+    for (AVLNode *cur = zset->tree; cur;) {
+        if (zless(cur, score, name, len)) {
+            cur = cur->right;
+        } else {
+            found = cur; // candidate
+            cur = cur->left;
+        }
+    }
+    return found ? container_of(found, ZNode, tree) : NULL;
+}
+
+// offset into the succeeding of preceding node
+ZNode *znode_offset(ZNode *node, int64_t offset) {
+    // walk to the n-th succesesor/predecessor (offset)
+    AVLNode *tnode = node ? avl_offset(&node->tree, offset) : NULL;
+}
