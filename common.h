@@ -23,3 +23,11 @@ enum {
   SER_DBL = 4,
   SER_ARR = 5,
 };
+
+static uint32_t max(uint32_t lhs, uint32_t rhs) {
+  return lhs < rhs ? rhs : lhs;
+}
+
+static uint32_t min(size_t lhs, size_t rhs) {
+  return lhs < rhs ? lhs : rhs; 
+}

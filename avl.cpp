@@ -2,17 +2,11 @@
 #include "avl.h"
 using namespace std;
 
-static void avl_init(AVLNode *node) {
-    node->depth = 1;
-    node->cnt = 1;
-    node->left = node->right = node->parent = NULL;
-}
-
-static uint32_t avl_depth(AVLNode *node) {
+uint32_t avl_depth(AVLNode *node) {
     return node ? node->depth : 0;
 }
 
-static uint32_t avl_cnt(AVLNode *node) {
+uint32_t avl_cnt(AVLNode *node) {
     return node ? node->cnt : 0;
 }
 
@@ -67,7 +61,7 @@ static AVLNode *avl_fix_right(AVLNode *root) {
 }
 
 // fix imbalanced nodes and maintain invariants until the root is reached
-static AVLNode *avl_fix(AVLNode *node) {
+AVLNode *avl_fix(AVLNode *node) {
     while (true) {
         avl_update(node);
         uint32_t l = avl_depth(node->left);
@@ -90,7 +84,7 @@ static AVLNode *avl_fix(AVLNode *node) {
 }
 
 // detach a node and returns the new root of the tree
-static AVLNode *avl_del(AVLNode *node) {
+AVLNode *avl_del(AVLNode *node) {
     if (node->right == NULL) {
         // no right subtree, replace the node with the left subtree
         // link the left subtree to the parent
@@ -127,4 +121,33 @@ static AVLNode *avl_del(AVLNode *node) {
             return victim;
         }
     }
+}
+
+AVLNode *avl_offset(AVLNode *node, int64_t offset) {
+    int64_t pos = 0;
+    while (offset != pos) {
+        if (pos < offset && pos + avl_cnt(node->right) >= offset) {
+            // target in inside the right subtree
+            node = node->right;
+            pos += avl_cnt(node->left) + 1;
+        } else if (pos > offset && pos - avl_cnt(node->left) <= offset) {
+            // target is inside the left subtree
+            node = node->left;
+            pos -= avl_cnt(node->right) + 1;
+        } else {
+            // go to parent
+            AVLNode *parent = node->parent;
+            if (!parent) {
+                return NULL;
+            }
+            if (parent->right == node) {
+                pos -= avl_cnt(node->left) + 1;
+            } else {
+                pos += avl_cnt(node->right) + 1;
+            }
+            node = parent;
+        }
+    }
+    
+    return node;    
 }

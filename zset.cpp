@@ -104,6 +104,7 @@ bool zset_add(ZSet *zset, const char *name, size_t len, double score) {
 }
 
 // delete
+
 // lookup and detach a node by name
 ZNode *zset_pop(ZSet *zset, const char *name, size_t len) {
     if (!zset->tree) {
@@ -123,6 +124,7 @@ ZNode *zset_pop(ZSet *zset, const char *name, size_t len) {
     zset->tree = avl_del(&node->tree);
     return node;
 };
+
 // deallocate the node
 void znode_del(ZNode *node) {
     free(node);
@@ -146,4 +148,5 @@ ZNode *zset_query(ZSet *zset, double score, const char *name, size_t len) {
 ZNode *znode_offset(ZNode *node, int64_t offset) {
     // walk to the n-th succesesor/predecessor (offset)
     AVLNode *tnode = node ? avl_offset(&node->tree, offset) : NULL;
+    return tnode ? container_of(tnode, ZNode, tree) : NULL;
 }
