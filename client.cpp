@@ -12,16 +12,6 @@
 #include <vector>
 #include "common.h"
 
-static void msg(const char *msg) {
-    fprintf(stderr, "%s\n", msg);
-}
-
-static void die(const char *msg) {
-    int err = errno;
-    fprintf(stderr, "[%d] %s\n", err, msg);
-    abort();
-}
-
 static int32_t read_full(int fd, char *buf, size_t n) {
   while (n > 0) {
     ssize_t rv = read(fd, buf, n);
@@ -209,7 +199,7 @@ int main(int argc, char **argv) {
 
   struct sockaddr_in addr = {};
   addr.sin_family = AF_INET;
-  addr.sin_port = ntohs(1234);
+  addr.sin_port = ntohs(1235);
   addr.sin_addr.s_addr = ntohl(INADDR_LOOPBACK);
   int rv = connect(fd, (const struct sockaddr *)&addr, sizeof(addr));
   if (rv) {

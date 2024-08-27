@@ -15,6 +15,16 @@ static uint64_t str_hash(const uint8_t *data, size_t len) {
   return h;
 }
 
+static void msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+}
+
+static void die(const char *msg) {
+    int err = errno;
+    fprintf(stderr, "[%d] %s\n", err, msg);
+    abort();
+}
+
 enum {
   SER_NIL = 0,
   SER_ERR = 1,
