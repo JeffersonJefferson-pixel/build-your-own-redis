@@ -1,9 +1,9 @@
 
 #include <math.h>
+#include <time.h>
 #include "server_data.h"
-
-// data structure for the key space
-HMap db;
+#include "heap.h"
+#include "server_common.h"
 
 static void h_scan(HTab *tab, void (*f)(HNode *, void *), void *arg) {
   if (tab->size == 0) {
@@ -44,9 +44,9 @@ static bool str2int(const std::string &s, int64_t &out) {
 
 void do_keys(std::vector<std::string> &cmd, std::string &out) {
   (void)cmd;
-  out_arr(out, (uint32_t)hm_size(&db));
-  h_scan(&db.ht1, &cb_scan, &out);
-  h_scan(&db.ht2, &cb_scan, &out);
+  out_arr(out, (uint32_t)hm_size(&g_data.db));
+  h_scan(&g_data.db.ht1, &cb_scan, &out);
+  h_scan(&g_data.db.ht2, &cb_scan, &out);
 }
 
 void do_get(std::vector<std::string> &cmd, std::string &out) {
@@ -54,7 +54,7 @@ void do_get(std::vector<std::string> &cmd, std::string &out) {
   key.key.swap(cmd[1]);
   key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
 
-  HNode *node = hm_lookup(&db, &key.node, &entry_eq);
+  HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
   if (!node) {
     return out_nil(out);
   }
@@ -73,7 +73,7 @@ void do_set(std::vector<std::string> &cmd, std::string &out) {
   key.key.swap(cmd[1]);
   key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
 
-  HNode *node = hm_lookup(&db, &key.node, &entry_eq);
+  HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
   if (node) {
     Entry *ent = container_of(node, Entry, node);
     if (ent->type != T_STR) {
@@ -85,19 +85,56 @@ void do_set(std::vector<std::string> &cmd, std::string &out) {
     ent->key.swap(key.key);
     ent->node.hcode = key.node.hcode;
     ent->val.swap(cmd[2]);
-    hm_insert(&db, &ent->node);
+    hm_insert(&g_data.db, &ent->node);
   }
 
   out_nil(out);
 }
 
-static void entry_del(Entry *ent) {
+void heap_delete(std::vector<HeapItem> &a, size_t pos) {
+  // swap erased item with last ietms
+  a[pos] = a.back();
+  a.pop_back();
+  // update swapped item
+  if (pos < a.size()) {
+      heap_update(a.data(), pos, a.size());
+  }
+}
+
+void heap_upsert(std::vector<HeapItem> &a, size_t pos, HeapItem t) {
+  if (pos < a.size()) {
+    // update
+    a[pos] = t;
+  } else {
+    // append
+    pos = a.size();
+    a.push_back(t);
+  }
+  heap_update(a.data(), pos, a.size());
+}
+
+static void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
+  if (ttl_ms < 0 && ent->heap_idx != (size_t)-1) {
+    // remove ttl
+    heap_delete(g_data.heap, ent->heap_idx);
+    ent->heap_idx = -1;
+  } else if (ttl_ms >= 0) {
+    uint64_t expire_at = get_monotonic_msec() + (uint64_t)ttl_ms;
+    HeapItem item = {expire_at, &ent->heap_idx};
+    heap_upsert(g_data.heap, ent->heap_idx, item);
+
+  }
+}
+
+void entry_del(Entry *ent) {
   switch (ent->type) {
     case T_ZSET:
       zset_dispose(ent->zset);
       delete ent->zset;
       break;
   }
+  // remove ttl from heap.
+  entry_set_ttl(ent, -1);
   delete ent;
 }
 
@@ -106,7 +143,7 @@ void do_del(std::vector<std::string> cmd, std::string &out) {
   key.key.swap(cmd[1]);
   key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
 
-  HNode *node = hm_pop(&db, &key.node, &entry_eq);
+  HNode *node = hm_pop(&g_data.db, &key.node, &entry_eq);
   if (node) {
     entry_del(container_of(node, Entry, node));
   }
@@ -118,7 +155,7 @@ bool expect_zset(std::string &out, std::string &s, Entry **ent) {
   Entry key;
   key.key.swap(s);
   key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
-  HNode *hnode = hm_lookup(&db, &key.node, &entry_eq);
+  HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
   if (!hnode) {
     out_nil(out);
     return false;
@@ -143,7 +180,7 @@ void do_zadd(std::vector<std::string> &cmd, std::string &out) {
   Entry key;
   key.key.swap(cmd[1]);
   key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
-  HNode *hnode = hm_lookup(&db, &key.node, &entry_eq);
+  HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
 
   Entry *ent = NULL;
   if (!hnode) {
@@ -152,7 +189,7 @@ void do_zadd(std::vector<std::string> &cmd, std::string &out) {
     ent->node.hcode = key.node.hcode;
     ent->type = T_ZSET;
     ent->zset = new ZSet();
-    hm_insert(&db, &ent->node);
+    hm_insert(&g_data.db, &ent->node);
   } else {
     ent = container_of(hnode, Entry, node);
     if (ent->type != T_ZSET) {
@@ -239,4 +276,22 @@ void do_zquery(std::vector<std::string> &cmd, std::string &out) {
         n += 2;
     }
     end_arr(out, arr, n);
+}
+
+void do_expire(std::vector<std::string> &cmd, std::string &out) {
+  // parse args
+  int64_t ttl_ms = 0;
+  if (!str2int(cmd[2], ttl_ms)) {
+    return out_err(out, ERR_ARG, "expect int64");
+  }
+  // lookup the key.
+  Entry key;
+  key.key.swap(cmd[1]);
+  key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+  HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+  if (node) {
+    Entry *ent = container_of(node, Entry, node);
+    entry_set_ttl(ent, ttl_ms);
+  }
+  return out_int(out, node ? 1 : 0);
 }

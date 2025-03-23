@@ -27,9 +27,6 @@ struct Conn {
 
 void init_server_conn();
 void fd_set_nb(int fd);
-uint32_t next_timer_ms();
 void connection_io(Conn* conn, void (* req_func)(Conn *), void (* res_func)(Conn *));
 void conn_done(Conn *conn);
-void process_timers();
 int32_t accept_new_conn(int fd);
-void run_event_loop(int fd, void (* req_func)(Conn *), void (* res_func)(Conn *));

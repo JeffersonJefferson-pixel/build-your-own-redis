@@ -20,6 +20,11 @@
 #include "server_conn.h"
 #include "server_out.h"
 #include "server_data.h"
+#include "heap.h"
+#include "server_common.h"
+
+const uint64_t k_idle_timeout_ms = 5 * 1000;
+
 
 static bool try_flush_buffer(Conn *conn) {
   ssize_t rv = 0;
@@ -118,6 +123,8 @@ static void do_request(std::vector<std::string> cmd, std::string &out) {
     do_zscore(cmd, out);
   } else if (cmd.size() == 6 && cmd_is(cmd[0], "zquery")) {
     do_zquery(cmd, out);
+  } else if (cmd.size() == 3 && cmd_is(cmd[0], "ttl")) {
+    do_expire(cmd, out);
   } else {
     // cmd is not recognized
     out_err(out, ERR_UNKNOWN, "Unknown cmd");
@@ -218,6 +225,109 @@ static bool try_fill_buffer(Conn *conn) {
 
 static void state_req(Conn *conn) {
   while (try_fill_buffer(conn)) {}
+}
+
+static bool hnode_same(HNode *node, HNode *key) {
+  return node == key;
+}
+
+// takes the nearest timer from the list and use it to calculate the timeout value of poll.
+uint32_t next_timer_ms() {
+  uint64_t now_ms = get_monotonic_msec();
+  uint64_t next_ms = (uint64_t)-1;
+  // idle timer using linked list
+  if (!dlist_empty(&g_data.idle_list)) {
+    Conn *conn = container_of(g_data.idle_list.next, Conn, idle_list);
+    next_ms = conn->idle_start + k_idle_timeout_ms;
+  }
+  // ttl timers using heap
+  if (!g_data.heap.empty()) {
+    next_ms == g_data.heap[0].val;
+  }
+  // timeout
+  if (next_ms == (uint64_t)-1) {
+    return -1; // no timers
+  }
+  if (next_ms <= now_ms) {
+    return 0;
+  }
+
+  return (uint32_t)(next_ms - now_ms);
+}
+
+
+static void process_timers() {
+  uint64_t now_ms = get_monotonic_msec();
+  // idle timer with linked list.
+  while (!dlist_empty(&g_data.idle_list)) {
+    Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+    uint64_t next_ms = next->idle_start + k_idle_timeout_ms;
+    if (next_ms >= now_ms) {
+      break; // not expired
+    }
+
+    printf("removing idle connection: %d\n", next->fd);
+    conn_done(next);
+  }
+  // ttl timer using a heap
+  // limit amount of work per loop iteration
+  const size_t k_max_works = 2000;
+  size_t nworks = 0;
+  const std::vector<HeapItem> &heap = g_data.heap;
+  while (!heap.empty() && heap[0].val < now_ms && nworks++ < k_max_works) {
+    // delete key-value
+    Entry *ent = container_of(heap[0].ref, Entry, heap_idx);
+    hm_pop(&g_data.db, &ent->node, &hnode_same);
+    entry_del(ent);
+  }
+}
+
+static void run_event_loop(int fd,  void (* req_func)(Conn *), void (* res_func)(Conn *)) {
+  std::vector<struct pollfd> poll_args;
+  while (true) {
+    poll_args.clear();
+    struct pollfd pfd = {fd, POLLIN, 0};
+    poll_args.push_back(pfd);
+    // connection fds
+    for (Conn *conn : g_data.fd2conn) {
+      if (!conn) {
+        continue;
+      }
+      struct pollfd pfd = {};
+      pfd.fd = conn->fd;
+      pfd.events = (conn->state == STATE_REQ) ? POLLIN : POLLOUT;
+      pfd.events = pfd.events | POLLERR;
+      poll_args.push_back(pfd);
+    }
+
+    // poll for active fds
+    int timeout_ms = (int)next_timer_ms();
+    int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), timeout_ms);
+    if (rv < 0) {
+      die("poll");
+    }
+
+    // process active connections
+    for (size_t i = 1; i < poll_args.size(); ++i) {
+      if (poll_args[i].revents) {
+        Conn *conn = g_data.fd2conn[poll_args[i].fd];
+        connection_io(conn, req_func, res_func);
+        if (conn->state == STATE_END) {
+          // client closed
+          // destroy connection
+          conn_done(conn);
+        }
+      }
+    }
+
+    // handle timers
+    process_timers();
+
+    // try to accept a new connection
+    if (poll_args[0].revents) {
+      (void)accept_new_conn(fd);
+    }
+  }
 }
 
 int main() {
